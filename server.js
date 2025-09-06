@@ -285,21 +285,46 @@ socket.on("state",s=>{state=s;if(!me.gameCode)return;const g=state.games[me.game
 app.get("/admin", (req, res) => {
   res.send(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>BFC Admin</title>
-<style>body{background:#0f172a;color:#f8fafc;font-family:sans-serif;padding:20px}</style></head>
-<body><h1>BFC Admin</h1>
-<div id="login"><input id="pw" type="password" placeholder="password"/><button onclick="login()">Enter</button></div>
+<style>
+body{background:#0f172a;color:#f8fafc;font-family:sans-serif;padding:20px}
+.card{background:#111827;padding:12px;border-radius:8px;margin:10px 0}
+input,select{padding:6px;margin:2px;background:#0b1220;color:#f8fafc;border:1px solid #333;border-radius:6px}
+button{padding:6px 10px;border:none;border-radius:6px;background:#3b82f6;color:white;cursor:pointer;margin:4px}
+button.danger{background:#b91c1c}
+table{width:100%;border-collapse:collapse}
+th,td{padding:6px;border-bottom:1px solid #333}
+</style></head>
+<body>
+<h1>BFC Admin</h1>
+<div id="login"><input id="pw" type="password"/><button onclick="login()">Enter</button></div>
 <div id="panel" style="display:none">
-  <select id="gameSel"></select><button onclick="loadGame()">Load</button><button onclick="resetGame()">Reset</button>
-  <h2>Teams</h2><div id="teams"></div>
-  <h2>Bars</h2><div id="bars"></div>
+  <div class="card">
+    <label>Game</label><select id="gameSel"></select>
+    <button onclick="loadGame()">Load</button>
+    <button class="danger" onclick="resetGame()">Reset Game</button>
+  </div>
+  <div class="card">
+    <h3>Teams & Score Adjustments</h3>
+    <table id="teamsTbl"><thead><tr><th>Team</th><th>Owned Bars</th><th>Adj</th><th>Total</th></tr></thead><tbody></tbody></table>
+    <button onclick="saveAdjustments()">Save Adjustments</button>
+  </div>
+  <div class="card">
+    <h3>Bars</h3>
+    <table id="barsTbl"><thead><tr><th>Name</th><th>Owner</th><th>Locked</th></tr></thead><tbody></tbody></table>
+    <button onclick="saveBars()">Save Bars</button>
+  </div>
 </div>
 <script>
 const TEAMS=${JSON.stringify(TEAMS)};
-const GAMES=${JSON.stringify(GAME_CODES)};
-let SECRET="",CUR=GAMES[0];
-function login(){if(document.getElementById('pw').value==='${ADMIN_PASSWORD}'){SECRET='${ADMIN_PASSWORD}';document.getElementById('login').style.display='none';document.getElementById('panel').style.display='block';const s=document.getElementById('gameSel');s.innerHTML=GAMES.map(g=>'<option>'+g+'</option>').join('');}}
-async function loadGame(){CUR=document.getElementById('gameSel').value;const r=await fetch('/api/admin/state?game='+CUR,{headers:{'x-admin-secret':SECRET}});const j=await r.json();if(!j.ok){alert(j.error);return;}document.getElementById('teams').innerHTML=TEAMS.map(t=>'<div>'+t.name+' ('+t.code+'): '+(j.scores.final[t.code]||0)+' pts (Adj:'+j.adjustments[t.code]+')</div>').join('');document.getElementById('bars').innerHTML=Object.values(j.bars).map(b=>'<div>'+b.name+' — '+(b.owner||'Unclaimed')+(b.locked?' 🔒':'')+'</div>').join('');}
-async function resetGame(){await fetch('/api/admin/resetGame',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR})});loadGame();}
+const GAME_CODES=${JSON.stringify(GAME_CODES)};
+let SECRET="",CUR=GAME_CODES[0],ADMIN_STATE=null;
+function login(){if(document.getElementById('pw').value==='${ADMIN_PASSWORD}'){SECRET='${ADMIN_PASSWORD}';document.getElementById('login').style.display='none';document.getElementById('panel').style.display='block';const s=document.getElementById('gameSel');s.innerHTML=GAME_CODES.map(c=>'<option>'+c+'</option>').join('');}}
+async function loadGame(){CUR=document.getElementById('gameSel').value;const r=await fetch('/api/admin/state?game='+CUR,{headers:{'x-admin-secret':SECRET}});const j=await r.json();if(!j.ok){alert(j.error);return;}ADMIN_STATE=j;renderTeams();renderBars();}
+function renderTeams(){const tb=document.querySelector('#teamsTbl tbody');tb.innerHTML='';const counts=ADMIN_STATE.scores.counts||{};const final=ADMIN_STATE.scores.final||{};const adj=ADMIN_STATE.adjustments||{};TEAMS.forEach(t=>{const tr=document.createElement('tr');tr.innerHTML='<td>'+t.name+' ('+t.code+')</td><td>'+(counts[t.code]||0)+'</td><td><input value="'+(adj[t.code]||0)+'" data-team="'+t.code+'" class="adj" style="width:60px"/></td><td>'+(final[t.code]||0)+'</td>';tb.appendChild(tr);});}
+function renderBars(){const tb=document.querySelector('#barsTbl tbody');tb.innerHTML='';const bars=ADMIN_STATE.bars||{};Object.entries(bars).forEach(([pid,b])=>{const tr=document.createElement('tr');const ownerSel='<select class="owner" data-pid="'+pid+'"><option value="">Unclaimed</option>'+TEAMS.map(t=>'<option '+(b.owner===t.code?'selected':'')+' value="'+t.code+'">'+t.name+'</option>').join('')+'</select>';const lockChk='<input type="checkbox" class="locked" data-pid="'+pid+'" '+(b.locked?'checked':'')+' />';tr.innerHTML='<td>'+b.name+'</td><td>'+ownerSel+'</td><td>'+lockChk+'</td>';tb.appendChild(tr);});}
+async function saveAdjustments(){const inputs=Array.from(document.querySelectorAll('.adj'));const payload={};inputs.forEach(i=>payload[i.dataset.team]=Number(i.value||0));await fetch('/api/admin/saveAdjustments',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR,adjustments:payload})});loadGame();}
+async function saveBars(){const rows=Array.from(document.querySelectorAll('#barsTbl tbody tr'));const bars=rows.map(tr=>{const name=tr.children[0].innerText;const ownerSel=tr.querySelector('.owner');const locked=tr.querySelector('.locked').checked;const placeId=ownerSel.dataset.pid;const b=ADMIN_STATE.bars[placeId]||{};return{placeId,name,lat:b.lat||0,lng:b.lng||0,owner:ownerSel.value||null,locked};});await fetch('/api/admin/saveBars',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR,bars})});loadGame();}
+async function resetGame(){if(!confirm('Reset '+CUR+'?'))return;await fetch('/api/admin/resetGame',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR})});loadGame();}
 </script></body></html>`);
 });
 
