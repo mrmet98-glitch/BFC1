@@ -1,8 +1,5 @@
 // server.js
-// Battle for Canggu simplified version
-// - 4 preconfigured teams with join codes
-// - One team photo required for claims
-// - No challenge deck logic (using physical cards)
+// Battle for Canggu (Improved UI + Lock support + Mobile friendly)
 
 const express = require("express");
 const http = require("http");
@@ -131,12 +128,12 @@ app.post("/api/join", (req, res) => {
   res.json({ ok: true, team: db.teams[teamCode] });
 });
 
-// ---------- Claim a bar ----------
+// ---------- Claim / Lock ----------
 app.post("/api/claim", upload.single("teamPhoto"), (req, res) => {
   try {
-    const { teamCode, placeId, barName, lat, lng } = req.body;
+    const { teamCode, placeId, barName, lat, lng, action } = req.body;
     if (!teamCode) return res.status(400).json({ error: "Missing teamCode" });
-    if (!req.file) return res.status(400).json({ error: "Team photo required" });
+    if (!req.file && action === "claim") return res.status(400).json({ error: "Team photo required" });
 
     const team = ensureTeam(teamCode);
     if (!db.bars[placeId]) {
@@ -144,16 +141,21 @@ app.post("/api/claim", upload.single("teamPhoto"), (req, res) => {
     }
 
     const bar = db.bars[placeId];
-    if (bar.locked) return res.status(400).json({ error: "Bar is locked" });
 
-    // Claim or steal
-    if (!bar.owner) {
-      bar.owner = teamCode;
-      team.score += 1;
-    } else if (bar.owner !== teamCode) {
-      // Steal rule
-      bar.owner = teamCode;
-      // no extra point for steal in this version
+    if (action === "lock") {
+      if (bar.owner !== teamCode) return res.status(400).json({ error: "Only the owner can lock" });
+      if (bar.locked) return res.status(400).json({ error: "Already locked" });
+      bar.locked = true;
+    } else {
+      if (bar.locked) return res.status(400).json({ error: "Bar is locked" });
+
+      // Claim or steal
+      if (!bar.owner) {
+        bar.owner = teamCode;
+        team.score += 1;
+      } else if (bar.owner !== teamCode) {
+        bar.owner = teamCode; // steal (no extra point)
+      }
     }
 
     saveDB(db);
@@ -178,30 +180,54 @@ app.get("/", (req, res) => {
         src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&callback=initMap">
       </script>
       <style>
-        body { font-family: sans-serif; margin:0; }
-        #map { height:60vh; }
+        body { font-family: system-ui, sans-serif; margin:0; background:#0f172a; color:#f8fafc; }
+        h1 { text-align:center; padding:12px; background:#1e293b; margin:0; }
+        #map { height:50vh; width:100%; }
+        .container { padding:10px; }
+        input, button {
+          margin:6px 0; padding:10px; font-size:16px; border-radius:8px; border:none;
+        }
+        input { width:100%; max-width:300px; }
+        button {
+          background:#3b82f6; color:white; cursor:pointer;
+          transition: background 0.2s;
+        }
+        button:hover { background:#2563eb; }
+        #actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:10px; }
+        #actions button { flex:1; min-width:100px; }
+        ul { list-style:none; padding:0; }
+        li { margin:4px 0; }
+        @media(max-width:600px){
+          #map { height:40vh; }
+          input, button { font-size:14px; }
+        }
       </style>
     </head>
     <body>
       <h1>Battle for Canggu</h1>
-      <div>
-        <label>Game Code: <input id="accessCode"/></label>
-        <label>Team Code: <input id="teamCode"/></label>
-        <label>Your Name: <input id="displayName"/></label>
-        <button onclick="join()">Join</button>
-      </div>
-      <div id="joined" style="display:none;">
-        <div id="map"></div>
-        <input id="barSearch" placeholder="Search bar..."/>
-        <br/>
-        <input type="file" id="teamPhoto" accept="image/*" capture="environment"/>
-        <button onclick="claim()">Claim Bar</button>
-        <h2>Leaderboard</h2>
-        <ul id="scores"></ul>
+      <div class="container">
+        <div id="joinForm">
+          <input id="accessCode" placeholder="Game Code (if set)"/>
+          <input id="teamCode" placeholder="Team Code"/>
+          <input id="displayName" placeholder="Your Name"/>
+          <button onclick="join()">Join</button>
+        </div>
+        <div id="gameUI" style="display:none;">
+          <div id="map"></div>
+          <input id="barSearch" placeholder="Search bar..."/>
+          <input type="file" id="teamPhoto" accept="image/*" capture="environment"/>
+          <div id="actions">
+            <button onclick="claim()">Claim (+1)</button>
+            <button onclick="lockBar()">Lock (after challenge)</button>
+            <button onclick="steal()">Steal</button>
+          </div>
+          <h2>Leaderboard</h2>
+          <ul id="scores"></ul>
+        </div>
       </div>
       <script>
         const socket = io();
-        let state={}, me={};
+        let state={}, me={}, selectedPlace=null;
 
         function join(){
           fetch("/api/join",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -211,16 +237,18 @@ app.get("/", (req, res) => {
               displayName:document.getElementById("displayName").value
             })})
           .then(r=>r.json()).then(d=>{
-            if(d.ok){ me=d.team; document.getElementById("joined").style.display="block"; }
-            else alert(d.error);
+            if(d.ok){
+              me.teamCode=document.getElementById("teamCode").value;
+              document.getElementById("joinForm").style.display="none";
+              document.getElementById("gameUI").style.display="block";
+            } else alert(d.error);
           });
         }
 
-        let map, autocomplete, selectedPlace=null;
         function initMap(){
-          map=new google.maps.Map(document.getElementById("map"),{center:{lat:-8.65,lng:115.13},zoom:14});
+          const map=new google.maps.Map(document.getElementById("map"),{center:{lat:-8.65,lng:115.13},zoom:14});
           const input=document.getElementById("barSearch");
-          autocomplete=new google.maps.places.Autocomplete(input);
+          const autocomplete=new google.maps.places.Autocomplete(input);
           autocomplete.addListener("place_changed",()=>{
             const place=autocomplete.getPlace();
             if(!place.geometry){return;}
@@ -233,7 +261,7 @@ app.get("/", (req, res) => {
         function claim(){
           if(!selectedPlace){alert("Select a bar first!");return;}
           const fd=new FormData();
-          fd.append("teamCode",document.getElementById("teamCode").value);
+          fd.append("teamCode",me.teamCode);
           fd.append("placeId",selectedPlace.id);
           fd.append("barName",selectedPlace.name);
           fd.append("lat",selectedPlace.lat);
@@ -241,8 +269,37 @@ app.get("/", (req, res) => {
           const file=document.getElementById("teamPhoto").files[0];
           if(!file){alert("Take a team photo!");return;}
           fd.append("teamPhoto",file);
+          fd.append("action","claim");
           fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(d=>{
             if(!d.ok) alert(d.error); else alert("Claimed!");
+          });
+        }
+
+        function lockBar(){
+          if(!selectedPlace){alert("Select a bar first!");return;}
+          const fd=new FormData();
+          fd.append("teamCode",me.teamCode);
+          fd.append("placeId",selectedPlace.id);
+          fd.append("barName",selectedPlace.name);
+          fd.append("lat",selectedPlace.lat);
+          fd.append("lng",selectedPlace.lng);
+          fd.append("action","lock");
+          fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(d=>{
+            if(!d.ok) alert(d.error); else alert("Locked!");
+          });
+        }
+
+        function steal(){
+          if(!selectedPlace){alert("Select a bar first!");return;}
+          const fd=new FormData();
+          fd.append("teamCode",me.teamCode);
+          fd.append("placeId",selectedPlace.id);
+          fd.append("barName",selectedPlace.name);
+          fd.append("lat",selectedPlace.lat);
+          fd.append("lng",selectedPlace.lng);
+          fd.append("action","claim");
+          fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(d=>{
+            if(!d.ok) alert(d.error); else alert("Stolen!");
           });
         }
 
@@ -252,6 +309,7 @@ app.get("/", (req, res) => {
           Object.values(s.teams).forEach(t=>{
             const li=document.createElement("li");
             li.textContent=t.name+" — "+t.score+" pts";
+            li.style.color=t.color;
             ul.appendChild(li);
           });
         });
@@ -262,4 +320,5 @@ app.get("/", (req, res) => {
 });
 
 server.listen(PORT, () => console.log("Battle for Canggu running on port", PORT));
+
 
