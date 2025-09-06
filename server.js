@@ -1,9 +1,5 @@
 // server.js
-// Battle for Canggu — Multi-game codes + Admin panel + Mobile-friendly UI
-// - Game codes: Testing123, TestingFri, TestBOM, TestDPS, rajuiskadak
-// - Claim needs photo; Steal/Lock don't
-// - Scores = owned bars + admin adjustments
-// - Admin panel (/admin, password: raju123): edit bars/owners/lock, adjust scores, reset game
+// Battle for Canggu — multi-game codes, admin panel, mobile UI
 
 const express = require("express");
 const http = require("http");
@@ -15,21 +11,21 @@ const { Server } = require("socket.io");
 const PORT = process.env.PORT || 3000;
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY || "";
 
-// -------- Teams (fixed) --------
+// ---- Teams ----
 const TEAMS = [
-  { code: "NAP123",  name: "Raj's Nap Champs",        color: "#ef4444" },
+  { code: "NAP123", name: "Raj's Nap Champs", color: "#ef4444" },
   { code: "PUMP456", name: "Raj's Pumpers & Dumpers", color: "#f59e0b" },
-  { code: "ROCK789", name: "Raj on the Rocks",        color: "#22c55e" },
-  { code: "RAJMA777",name: "Big Rajma",               color: "#3b82f6" },
+  { code: "ROCK789", name: "Raj on the Rocks", color: "#22c55e" },
+  { code: "RAJMA777", name: "Big Rajma", color: "#3b82f6" },
 ];
 
-// -------- Allowed game codes --------
+// ---- Game codes ----
 const GAME_CODES = ["Testing123", "TestingFri", "TestBOM", "TestDPS", "rajuiskadak"];
 
-// -------- Admin password --------
+// ---- Admin password ----
 const ADMIN_PASSWORD = "raju123";
 
-// -------- App, IO, uploads --------
+// ---- Express + IO ----
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -37,6 +33,7 @@ const io = new Server(server);
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "5mb" }));
 
+// ---- Uploads ----
 const uploadsDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 app.use("/uploads", express.static(uploadsDir));
@@ -50,7 +47,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// -------- DB: one file, multiple games --------
+// ---- DB ----
 const DB_FILE = path.join(__dirname, "db.json");
 function loadDB() {
   if (!fs.existsSync(DB_FILE)) {
@@ -76,7 +73,7 @@ function saveDB() {
 }
 let db = loadDB();
 
-// -------- Helpers --------
+// ---- Helpers ----
 function validGame(code) { return GAME_CODES.includes(code); }
 function ensureGame(gameCode) {
   if (!validGame(gameCode)) throw new Error("Invalid game code");
@@ -115,7 +112,7 @@ function broadcast() {
   });
 }
 
-// -------- Player API --------
+// ---- Player API ----
 app.post("/api/join", (req, res) => {
   const { gameCode, teamCode, displayName } = req.body;
   if (!gameCode || !validGame(gameCode)) return res.status(400).json({ error: "Enter a valid Game Code." });
@@ -165,7 +162,7 @@ app.post("/api/claim", upload.single("teamPhoto"), (req, res) => {
   }
 });
 
-// -------- Admin API --------
+// ---- Admin API ----
 function requireAdmin(req, res, next) {
   const pass = req.headers["x-admin-secret"] || req.query.secret || req.body.secret;
   if (pass === ADMIN_PASSWORD) return next();
@@ -227,21 +224,70 @@ app.post("/api/admin/resetGame", requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// -------- Pages --------
-// Player page (unchanged, trimmed for space)
+// ---- Player Page ----
 app.get("/", (req, res) => {
-  res.send(`<!doctype html><html><head> ... (player UI from before, unchanged) ... </html>`);
-});
-
-// Admin page (fixed escaping!)
-app.get("/admin", (req, res) => {
   res.send(`<!doctype html><html><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>BFC Admin</title>
-<style> body{background:#0f172a;color:#f8fafc;font-family:sans-serif} </style>
+<title>Battle for Canggu</title>
+<script src="/socket.io/socket.io.js"></script>
+<script async src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&callback=initMap"></script>
+<style>
+  body{margin:0;background:#0f172a;color:#f8fafc;font-family:sans-serif}
+  h1{margin:0;padding:12px;text-align:center;background:#1e293b}
+  .wrap{padding:10px;max-width:800px;margin:0 auto}
+  .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:10px;margin:10px 0}
+  input,button{font:inherit;padding:8px 10px;border-radius:8px;border:none;margin:4px 0}
+  input{background:#0b1220;color:#f8fafc;width:100%}
+  button{background:#3b82f6;color:white;cursor:pointer}
+  #map{height:50vh;border-radius:8px;margin:6px 0}
+  ul{list-style:none;padding:0;margin:0}
+</style>
 </head><body>
-<h1>BFC Admin</h1>
-<div id="login"><input id="pw" type="password"/><button onclick="login()">Enter</button></div>
+<h1>Battle for Canggu</h1>
+<div class="wrap">
+  <div class="card" id="join">
+    <input id="gameCode" placeholder="Game Code"/>
+    <input id="teamCode" placeholder="Team Code"/>
+    <input id="displayName" placeholder="Your Name"/>
+    <button onclick="joinGame()">Join</button>
+  </div>
+  <div id="app" style="display:none">
+    <div id="map"></div>
+    <input id="barSearch" placeholder="Search bar..."/>
+    <input type="file" id="teamPhoto" accept="image/*" capture="environment"/>
+    <div>
+      <button onclick="claim()">Claim</button>
+      <button onclick="lockBar()">Lock</button>
+      <button onclick="steal()">Steal</button>
+    </div>
+    <div class="card"><h3>Leaderboard</h3><ul id="scores"></ul></div>
+    <div class="card"><h3>Bars Claimed</h3><ul id="barsList"></ul></div>
+  </div>
+</div>
+<script>
+const socket=io();let state={games:{}},me={},map,autocomplete,selectedPlace=null;
+function initMap(){map=new google.maps.Map(document.getElementById("map"),{center:{lat:-8.65,lng:115.13},zoom:14});
+ const input=document.getElementById("barSearch");autocomplete=new google.maps.places.Autocomplete(input);
+ autocomplete.addListener("place_changed",()=>{const p=autocomplete.getPlace();if(!p.geometry)return;
+ map.setCenter(p.geometry.location);new google.maps.Marker({map,position:p.geometry.location});
+ selectedPlace={id:p.place_id,name:p.name,lat:p.geometry.location.lat(),lng:p.geometry.location.lng()};});}
+function joinGame(){fetch("/api/join",{method:"POST",headers:{"Content-Type":"application/json"},
+ body:JSON.stringify({gameCode:document.getElementById("gameCode").value,teamCode:document.getElementById("teamCode").value,displayName:document.getElementById("displayName").value})})
+ .then(r=>r.json()).then(j=>{if(!j.ok){alert(j.error);return;}me={gameCode:document.getElementById("gameCode").value,teamCode:document.getElementById("teamCode").value};document.getElementById("join").style.display="none";document.getElementById("app").style.display="block";});}
+function claim(){if(!selectedPlace)return alert("Select a bar");const f=document.getElementById("teamPhoto").files[0];if(!f)return alert("Photo required");const fd=new FormData();fd.append("gameCode",me.gameCode);fd.append("teamCode",me.teamCode);fd.append("placeId",selectedPlace.id);fd.append("barName",selectedPlace.name);fd.append("lat",selectedPlace.lat);fd.append("lng",selectedPlace.lng);fd.append("teamPhoto",f);fd.append("action","claim");fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(j=>{if(!j.ok)alert(j.error);});}
+function lockBar(){if(!selectedPlace)return alert("Select a bar");const fd=new FormData();fd.append("gameCode",me.gameCode);fd.append("teamCode",me.teamCode);fd.append("placeId",selectedPlace.id);fd.append("barName",selectedPlace.name);fd.append("lat",selectedPlace.lat);fd.append("lng",selectedPlace.lng);fd.append("action","lock");fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(j=>{if(!j.ok)alert(j.error);});}
+function steal(){if(!selectedPlace)return alert("Select a bar");const fd=new FormData();fd.append("gameCode",me.gameCode);fd.append("teamCode",me.teamCode);fd.append("placeId",selectedPlace.id);fd.append("barName",selectedPlace.name);fd.append("lat",selectedPlace.lat);fd.append("lng",selectedPlace.lng);fd.append("action","steal");fetch("/api/claim",{method:"POST",body:fd}).then(r=>r.json()).then(j=>{if(!j.ok)alert(j.error);});}
+socket.on("state",s=>{state=s;if(!me.gameCode)return;const g=state.games[me.gameCode];const teamsBy=Object.fromEntries(state.teams.map(t=>[t.code,t]));const ul=document.getElementById("scores");ul.innerHTML="";Object.values(state.teams).sort((a,b)=> (g.scores.final[b.code]||0)-(g.scores.final[a.code]||0)).forEach(t=>{const li=document.createElement("li");li.textContent=t.name+" — "+(g.scores.final[t.code]||0)+" pts";li.style.color=t.color;ul.appendChild(li);});const bl=document.getElementById("barsList");bl.innerHTML="";Object.values(g.bars).forEach(b=>{const li=document.createElement("li");li.textContent=b.name+" — "+(b.owner?teamsBy[b.owner].name:"Unclaimed")+(b.locked?" 🔒":"");bl.appendChild(li);});});
+</script></body></html>`);
+});
+
+// ---- Admin Page ----
+app.get("/admin", (req, res) => {
+  res.send(`<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>BFC Admin</title>
+<style>body{background:#0f172a;color:#f8fafc;font-family:sans-serif;padding:20px}</style></head>
+<body><h1>BFC Admin</h1>
+<div id="login"><input id="pw" type="password" placeholder="password"/><button onclick="login()">Enter</button></div>
 <div id="panel" style="display:none">
   <select id="gameSel"></select><button onclick="loadGame()">Load</button><button onclick="resetGame()">Reset</button>
   <h2>Teams</h2><div id="teams"></div>
@@ -251,11 +297,10 @@ app.get("/admin", (req, res) => {
 const TEAMS=${JSON.stringify(TEAMS)};
 const GAMES=${JSON.stringify(GAME_CODES)};
 let SECRET="",CUR=GAMES[0];
-function login(){ if(document.getElementById('pw').value==='${ADMIN_PASSWORD}'){SECRET='${ADMIN_PASSWORD}';document.getElementById('login').style.display='none';document.getElementById('panel').style.display='block'; const s=document.getElementById('gameSel'); s.innerHTML=GAMES.map(g=>'<option>'+g+'</option>').join('');}}
-async function loadGame(){CUR=document.getElementById('gameSel').value; const r=await fetch('/api/admin/state?game='+CUR,{headers:{'x-admin-secret':SECRET}}); const j=await r.json(); if(!j.ok){alert(j.error);return;} document.getElementById('teams').innerHTML=Object.values(TEAMS).map(t=>'<div>'+t.name+' ('+t.code+'): '+(j.scores.final[t.code]||0)+'</div>').join(''); document.getElementById('bars').innerHTML=Object.values(j.bars).map(b=>'<div>'+b.name+' — '+(b.owner||'Unclaimed')+(b.locked?' 🔒':'')+'</div>').join('');}
-async function resetGame(){await fetch('/api/admin/resetGame',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR})}); loadGame();}
-</script>
-</body></html>`);
+function login(){if(document.getElementById('pw').value==='${ADMIN_PASSWORD}'){SECRET='${ADMIN_PASSWORD}';document.getElementById('login').style.display='none';document.getElementById('panel').style.display='block';const s=document.getElementById('gameSel');s.innerHTML=GAMES.map(g=>'<option>'+g+'</option>').join('');}}
+async function loadGame(){CUR=document.getElementById('gameSel').value;const r=await fetch('/api/admin/state?game='+CUR,{headers:{'x-admin-secret':SECRET}});const j=await r.json();if(!j.ok){alert(j.error);return;}document.getElementById('teams').innerHTML=TEAMS.map(t=>'<div>'+t.name+' ('+t.code+'): '+(j.scores.final[t.code]||0)+' pts (Adj:'+j.adjustments[t.code]+')</div>').join('');document.getElementById('bars').innerHTML=Object.values(j.bars).map(b=>'<div>'+b.name+' — '+(b.owner||'Unclaimed')+(b.locked?' 🔒':'')+'</div>').join('');}
+async function resetGame(){await fetch('/api/admin/resetGame',{method:'POST',headers:{'Content-Type':'application/json','x-admin-secret':SECRET},body:JSON.stringify({gameCode:CUR})});loadGame();}
+</script></body></html>`);
 });
 
 io.on("connection", () => broadcast());
